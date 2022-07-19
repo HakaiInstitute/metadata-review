@@ -7,27 +7,54 @@ assignees: ''
 
 ---
 
+---
+name: Dataset name
+about: Template for metadata review
+title: Dataset name
+labels: ''
+assignees: ''
+
+---
+
 # Dataset Name
 
-## Checklist
+## Best Practices Checklist
 
-### Human Reviewer Checklist (things the metadata intake form can’t check)
+### In General
+- [ ] No previous versions of this metadata record exist (eg for earlier versions of the data, if so update that record rather than creating a new one)
+
+### Data Identification
+
+#### Dataset title:
+
+- [ ] No version information in the title
+- [ ] Frontloaded (with the most important information first) 
+- [ ] Include the geographical region the data apply to 
+- [ ] Short – aim for 60 characters including spaces 
+- [ ] Does not include acronyms – put these in the keywords 
+- [ ] Does not include the word “dataset” 
+- [ ] Time series datasets should include “time series” at the end of the title 
+- [ ] Does not include the time period (this is covered in the temporal extents fields)
+
+
+#### Abstract
 
 - [ ] Abbreviations have been expanded upon at first mention
-- [ ] Links work
-  - [ ] Resource links, link included in the citation
-  - [ ] If data record is completed: Resource link links to a download of the compressed data package (.zip)
-- [ ] Readme, changelog, data dictionary, protocols included in data-package
-- [ ] All files in the data package can be opened and are not corrupt
-- [ ] No organizations are listed under first name / last name
+
+### Spatial
+
+### Contact
+
+- [ ] No organizations listed under first / last name
 - [ ] The citation in the metadata record matches the preferred citation mentioned in the data package. 
+- [ ]  Include Hakai Institute as Publisher (& Distributor?)
 
-### Dataset title:
+### Resources
 
-- [ ] be frontloaded (with the most important information first) 
-include the geographical region the data apply to 
-- [ ] be short – aim for 60 characters including spaces 
-- [ ] not include acronyms – put these in the keywords 
-- [ ] not include the word “dataset” 
-- [ ] time series datasets should include “time series” at the end of the title 
-- [ ] not include the time period (this should only be used in the spreadsheet title)
+- [ ] Resource links go to specific dataset download (not generic platform like waterproperties.ca)
+- [ ] Readme, changelog, data dictionary, protocols included in data-package
+- [ ] Links work
+- [ ] If data record is completed: Resource link links to a download of the compressed data package (.zip)
+- [ ] All files in the data package can be opened and are not corrupt
+
+### Platform
