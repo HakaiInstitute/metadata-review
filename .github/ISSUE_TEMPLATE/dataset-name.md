@@ -47,12 +47,13 @@ assignees: ''
 
 - [ ] No organizations listed under first / last name
 - [ ] The citation in the metadata record matches the preferred citation mentioned in the data package. 
-- [ ]  Include Hakai Institute as Publisher (& Distributor?)
+- [ ] Include Hakai Institute as Publisher (& Distributor?)
 
 ### Resources
 
 - [ ] Resource links go to specific dataset download (not generic platform like waterproperties.ca)
 - [ ] Readme, changelog, data dictionary, protocols included in data-package
+- [ ] An archive folder for older data versions is included in the data package if the version is _not_ 1.0
 - [ ] Links work
 - [ ] Resource link links to a download of the compressed data package (.zip) of the correct version.
 - [ ] All files in the data package can be opened and are not corrupt
