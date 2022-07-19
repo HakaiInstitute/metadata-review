@@ -20,7 +20,6 @@ assignees: ''
 - [ ] Readme, changelog, data dictionary, protocols included in data-package
 - [ ] All files in the data package can be opened and are not corrupt
 - [ ] No organizations are listed under first name / last name
-
 - [ ] The citation in the metadata record matches the preferred citation mentioned in the data package. 
 
 ### Dataset title:
