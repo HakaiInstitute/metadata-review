@@ -54,7 +54,7 @@ assignees: ''
 - [ ] Resource links go to specific dataset download (not generic platform like waterproperties.ca)
 - [ ] Readme, changelog, data dictionary, protocols included in data-package
 - [ ] Links work
-- [ ] If data record is completed: Resource link links to a download of the compressed data package (.zip)
+- [ ] Resource link links to a download of the compressed data package (.zip) of the correct version.
 - [ ] All files in the data package can be opened and are not corrupt
 
 ### Platform
