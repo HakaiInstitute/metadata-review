@@ -43,9 +43,12 @@ assignees: ''
 
 ### Spatial
 
+- [ ] Ensure that Depth or Height Positive is correctly selected
+
 ### Contact
 
 - [ ] No organizations listed under first / last name
+- [ ] ROR and ORCID(s) are included and linked properly where applicable
 - [ ] The citation in the metadata record matches the preferred citation mentioned in the data package. 
 - [ ] Include Hakai Institute as Publisher (& Distributor?)
 
