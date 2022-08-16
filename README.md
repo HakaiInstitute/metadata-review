@@ -3,6 +3,7 @@
 
 As it currently stands there is no internal, formalized review process for the metadata records that are created for the Hakai Catalogue through the metadata intake form. Submissions of metadata records are currently tracked through e.g. GitHub issues, but only for ERDDAP datasets. Below are some recommendations that can be made to improve the efficiency of reviewing and publishing records, and ensuring consistency of metadata quality.
 
+Edits to the issue template should be made here: https://github.com/cioos-siooc/metadata-entry-form/blob/main/firebase-functions/functions/dataset-name.md
 --------
 
 ## Initial Submission
