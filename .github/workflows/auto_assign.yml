@@ -11,6 +11,6 @@ jobs:
             - name: 'Auto-assign issue'
               uses: pozil/auto-assign-issue@v1
               with:
-                  assignees: Br-Johnson,timvdstap,JessyBarrette,pramod-thupaki,zmonteith,santiagohakai,hakaiholmes
+                  assignees: Br-Johnson,timvdstap,JessyBarrette
                   numOfAssignee: 1
                   allowSelfAssign: true
