@@ -11,7 +11,7 @@ jobs:
             - name: 'Auto-assign issue'
               uses: pozil/auto-assign-issue@v1
               with:
-                  teams: hakaiinstitute/data-mobilization-team
+                  teams: data-mobilization-team
                   repo-token: ${{ secrets.CI_TOKEN }}
                   numOfAssignee: 1
                   allowSelfAssign: true
