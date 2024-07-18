@@ -11,6 +11,6 @@ jobs:
             - name: 'Auto-assign issue'
               uses: pozil/auto-assign-issue@v1
               with:
-                  assignees: timvdstap,JessyBarrette
+                  teams: hakaiinstitute/data-mobilization-team
                   numOfAssignee: 1
                   allowSelfAssign: true
