@@ -6,7 +6,8 @@
 # issue on submission. Finds the record's .yaml in the unpublished/hakai/ folder of
 # HakaiInstitute/hakai-metadata-entry-form-files (where the records service writes
 # submitted records), runs the review-metadata-submission skill with Claude Code,
-# and posts the report as a comment on the issue. If anything fails, it posts a short failure comment.
+# and posts the report
+# as a comment on the issue. If anything fails, it posts a short failure comment.
 #
 # Runs once per submission only: re-running the workflow from the Actions tab is
 # blocked (run_attempt == 1), and edited or reopened issues don't trigger it.
@@ -125,10 +126,11 @@ jobs:
             echo "::error::Set the CLAUDE_MODEL repository variable to pin the review model"
             exit 1
           fi
-          # Read-only tools plus web access for the link checks; no file edits.
+          # CI behaviour (no questions, no edits, report only) is defined in the skill's
+          # "When run in CI" section. Tools: read-only plus web access for link checks.
           claude --model "$CLAUDE_MODEL" \
             --allowedTools "Skill,Read,Glob,Grep,WebFetch,Bash(curl:*)" \
-            -p "Use the review-metadata-submission skill to review the record with file prefix ${PREFIX} in unpublished/hakai/. You are running non-interactively in GitHub Actions: do not ask questions and do not edit any files. Put any questions for the reviewer in the report itself. Reply with only the finished report in Markdown." \
+            -p "Running in GitHub Actions. Use the review-metadata-submission skill on file prefix ${PREFIX}." \
             > "$GITHUB_WORKSPACE/review.md"
           test -s "$GITHUB_WORKSPACE/review.md"
 
