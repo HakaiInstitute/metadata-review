@@ -1,0 +1,187 @@
+# AI-assisted review of submitted Hakai metadata records.
+#
+# Location: HakaiInstitute/metadata-review/.github/workflows/review-submission.yml
+#
+# Triggered when notify.js (hakai-metadata-entry-form) opens a "Dataset - <title>"
+# issue on submission. Finds the record's .yaml in the unpublished/hakai/ folder of
+# HakaiInstitute/hakai-metadata-entry-form-files (where the records service writes
+# submitted records), runs the review-metadata-submission skill with Claude Code,
+# and posts the report as a comment on the issue. If anything fails, it posts a short failure comment.
+#
+# Runs once per submission only: re-running the workflow from the Actions tab is
+# blocked (run_attempt == 1), and edited or reopened issues don't trigger it.
+# Claude usage is billed to Hakai's Claude Console organization (ANTHROPIC_API_KEY secret).
+
+name: AI review of metadata submission
+
+on:
+  issues:
+    types: [opened]
+
+permissions: {}
+
+jobs:
+  review:
+    # Only issues created by notify.js, and only on the first attempt
+    if: startsWith(github.event.issue.title, 'Dataset - ') && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      stale_date: ${{ steps.find.outputs.stale_date }}
+    steps:
+      - name: Get record path from the issue body
+        id: record
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          # The issue links .../hakai-metadata-entry-form/#/<lang>/hakai/<userID>/<recordID>
+          # but maintenance_note uses .../hakai-metadata-entry-form#/<lang>/hakai/...
+          # so match on the hakai/<userID>/<recordID> part only.
+          path=$(printf '%s' "$ISSUE_BODY" \
+            | grep -oP 'hakai-metadata-entry-form/?#/[a-z]{2}/hakai/\K[^/\s>]+/[^/\s>]+' \
+            | head -n1 || true)
+          if [ -z "$path" ]; then
+            echo "::error::No metadata entry form URL found in the issue body"
+            exit 1
+          fi
+          echo "path=hakai/$path" >> "$GITHUB_OUTPUT"
+
+      - name: Check out metadata files and skill
+        uses: actions/checkout@v5
+        with:
+          repository: HakaiInstitute/hakai-metadata-entry-form-files
+          path: files
+          fetch-depth: 0        # full history (without file contents) to date each file
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Wait for the record's files to arrive
+        id: find
+        working-directory: files
+        env:
+          RECORD_PATH: ${{ steps.record.outputs.path }}
+          ISSUE_CREATED: ${{ github.event.issue.created_at }}
+        run: |
+          # The issue and the files are created independently on submit, so the
+          # files may land shortly before or after the issue. A record that was put
+          # back into draft and re-submitted may still have files from its earlier
+          # submission, so only accept a file committed within 10 minutes before
+          # the issue was created, or later. Retry for ~5 minutes.
+          cutoff=$(( $(date -d "$ISSUE_CREATED" +%s) - 600 ))
+          match=""
+          for attempt in $(seq 1 10); do
+            # A record can match more than one file if its file name changed
+            # (e.g. after a title edit), so take the most recently committed one.
+            match=""; newest=0
+            for f in $(grep -lF -- "$RECORD_PATH" unpublished/hakai/*.yaml || true); do
+              t=$(git log -1 --format=%ct -- "$f")
+              if [ "${t:-0}" -gt "$newest" ]; then newest=$t; match=$f; fi
+            done
+            if [ -n "$match" ]; then
+              committed=$(git log -1 --format=%ct -- "$match")
+              if [ "${committed:-0}" -ge "$cutoff" ]; then
+                echo "Found $match, committed $(date -d "@$committed" -u +%FT%TZ)"
+                echo "prefix=$(basename "$match" .yaml)" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "Attempt $attempt: $match is from an earlier submission, waiting for the new version"
+            else
+              echo "Attempt $attempt: files not found yet, waiting 30 s"
+            fi
+            sleep 30
+            git fetch --quiet origin HEAD
+            git reset --quiet --hard FETCH_HEAD
+          done
+          if [ -n "$match" ]; then
+            # No new commit: the record was likely re-submitted without changes,
+            # so the existing files are still current. Review them, but say so.
+            stale=$(git log -1 --format=%cs -- "$match")
+            echo "::warning::No new version of $match; reviewing the version committed on $stale"
+            echo "prefix=$(basename "$match" .yaml)" >> "$GITHUB_OUTPUT"
+            echo "stale_date=$stale" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::error::No .yaml in unpublished/hakai/ matches $RECORD_PATH after 5 minutes"
+          exit 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run review skill
+        working-directory: files
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_MODEL: ${{ vars.CLAUDE_MODEL }}
+          PREFIX: ${{ steps.find.outputs.prefix }}
+        run: |
+          if [ -z "$CLAUDE_MODEL" ]; then
+            echo "::error::Set the CLAUDE_MODEL repository variable to pin the review model"
+            exit 1
+          fi
+          # Read-only tools plus web access for the link checks; no file edits.
+          claude --model "$CLAUDE_MODEL" \
+            --allowedTools "Skill,Read,Glob,Grep,WebFetch,Bash(curl:*)" \
+            -p "Use the review-metadata-submission skill to review the record with file prefix ${PREFIX} in unpublished/hakai/. You are running non-interactively in GitHub Actions: do not ask questions and do not edit any files. Put any questions for the reviewer in the report itself. Reply with only the finished report in Markdown." \
+            > "$GITHUB_WORKSPACE/review.md"
+          test -s "$GITHUB_WORKSPACE/review.md"
+
+      - name: Save report
+        uses: actions/upload-artifact@v4
+        with:
+          name: review
+          path: review.md
+
+  comment:
+    needs: review
+    # Runs even when the review job fails, so the issue always shows the outcome
+    if: always() && startsWith(github.event.issue.title, 'Dataset - ') && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Get report
+        if: needs.review.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: review
+
+      - name: Post comment on the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+          RESULT: ${{ needs.review.result }}
+          STALE_DATE: ${{ needs.review.outputs.stale_date }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "$RESULT" = "success" ] && [ -s review.md ]; then
+            {
+              echo "## AI-assisted review"
+              echo
+              echo "_Generated by the review-metadata-submission skill. These are suggestions for the reviewer; the checklist above still applies._"
+              echo
+              if [ -n "$STALE_DATE" ]; then
+                echo "> [!NOTE]"
+                echo "> No new version of this record's files appeared after submission, so this reviews the version committed on ${STALE_DATE}. If the record was edited before re-submitting, check that those edits are reflected."
+                echo
+              fi
+              head -c 60000 review.md   # GitHub comments are capped at 65,536 characters
+            } > comment.md
+          else
+            {
+              echo "## AI-assisted review"
+              echo
+              echo "The automated review could not be completed (result: ${RESULT})."
+              echo "A common cause is that the record's files did not reach hakai-metadata-entry-form-files."
+              echo "The review will not be retried automatically; please review this record manually."
+              echo "Run details: ${RUN_URL}"
+            } > comment.md
+          fi
+          gh issue comment "$ISSUE" --body-file comment.md
