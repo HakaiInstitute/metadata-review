@@ -178,6 +178,7 @@ jobs:
           name: review
 
       - name: Post comment on the issue
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
