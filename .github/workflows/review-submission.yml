@@ -1,0 +1,215 @@
+# AI-assisted review of submitted Hakai metadata records.
+#
+# Location: HakaiInstitute/metadata-review/.github/workflows/review-submission.yml
+#
+# Triggered when notify.js (hakai-metadata-entry-form) opens a "Dataset - <title>"
+# issue on submission. Only issues opened by the account notify.js authenticates
+# as are reviewed automatically: set the repository variable
+# SUBMISSION_ISSUE_AUTHOR (Settings > Secrets and variables > Actions > Variables)
+# to that account's login. The issue has a "Record Filename:<name>" line: the name,
+# without extension, of the record's .yaml in the unpublished/hakai/ folder of
+# HakaiInstitute/hakai-metadata-entry-form-files (where the records service writes
+# submitted records). The workflow runs the review-metadata-submission skill with
+# Claude Code on that file and posts the report as a comment on the issue. If
+# anything fails, it posts a short failure comment.
+#
+# Runs once per submission: re-running the workflow from the Actions tab is
+# blocked (run_attempt == 1), and edited or reopened issues don't trigger it.
+# To review a record again, start the workflow manually (Actions tab > Run
+# workflow) and give the issue number. A manual run reviews the file as it is now
+# (no freshness check) and posts a new comment on that issue, labelled as a
+# manual re-run. Only users with write access can start a manual run.
+# Claude usage is billed to Hakai's Claude Console organization (ANTHROPIC_API_KEY secret).
+
+name: AI review of metadata submission
+
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Number of the "Dataset - ..." issue to review again
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  review:
+    # Automatic: only issues opened by the account notify.js uses (repository
+    # variable SUBMISSION_ISSUE_AUTHOR), so nobody else can trigger a billable run
+    # by opening an issue with the right title. If the variable is not set, no
+    # automatic run happens. Manual: any run (restricted to users with write
+    # access by GitHub); its issue title is checked in the first step.
+    # Only on the first attempt.
+    if: >-
+      github.run_attempt == 1 &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.issue.user.login == vars.SUBMISSION_ISSUE_AUTHOR &&
+        startsWith(github.event.issue.title, 'Dataset - ')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      issue_ok: ${{ steps.issue.outputs.ok }}
+      stale_date: ${{ steps.find.outputs.stale_date }}
+    steps:
+      - name: Read the issue
+        id: issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.issue_number || github.event.issue.number }}
+        run: |
+          [[ "$ISSUE" =~ ^[0-9]+$ ]] || { echo "::error::Issue number must be digits only"; exit 1; }
+          json=$(gh issue view "$ISSUE" --json title,body,createdAt)
+          case "$(jq -r .title <<< "$json")" in
+            "Dataset - "*) ;;
+            *) echo "::error::Issue #$ISSUE is not a 'Dataset - ...' issue"; exit 1 ;;
+          esac
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+          echo "created_at=$(jq -r .createdAt <<< "$json")" >> "$GITHUB_OUTPUT"
+          # Only [A-Za-z0-9._-] is accepted, so the value is safe to use in a path
+          prefix=$(jq -r .body <<< "$json" | grep -m1 -oP '^Record Filename:<\K[A-Za-z0-9._-]+' || true)
+          [ -n "$prefix" ] || { echo "::error::No 'Record Filename:' line found in the issue body"; exit 1; }
+          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+
+      - name: Check out metadata files and skill
+        uses: actions/checkout@v5
+        with:
+          repository: HakaiInstitute/hakai-metadata-entry-form-files
+          path: files
+          fetch-depth: 0        # full history (without file contents) to date the file
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Wait for the record's file to arrive
+        id: find
+        working-directory: files
+        env:
+          FILE: unpublished/hakai/${{ steps.issue.outputs.prefix }}.yaml
+          ISSUE_CREATED: ${{ steps.issue.outputs.created_at }}
+        run: |
+          # A manual run reviews the current file as it is: no waiting, no freshness check.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            [ -f "$FILE" ] || { echo "::error::$FILE does not exist"; exit 1; }
+            exit 0
+          fi
+          # The issue and the file are created independently on submit, so the file
+          # may land shortly before or after the issue. A record that was put back
+          # into draft and re-submitted still has its earlier file (the name never
+          # changes), so only accept a commit within 10 minutes before the issue
+          # was created, or later. Retry for ~5 minutes.
+          cutoff=$(( $(date -d "$ISSUE_CREATED" +%s) - 600 ))
+          for attempt in $(seq 1 10); do
+            if [ -f "$FILE" ]; then
+              committed=$(git log -1 --format=%ct -- "$FILE")
+              [ "${committed:-0}" -ge "$cutoff" ] && exit 0
+              echo "Attempt $attempt: $FILE is from an earlier submission, waiting for the new version"
+            else
+              echo "Attempt $attempt: $FILE not found yet, waiting 30 s"
+            fi
+            [ "$attempt" -lt 10 ] || break
+            sleep 30
+            git fetch --quiet origin HEAD
+            git reset --quiet --hard FETCH_HEAD
+          done
+          if [ -f "$FILE" ]; then
+            # No new commit: the record was likely re-submitted without changes,
+            # so the existing file is still current. Review it, but say so.
+            stale=$(git log -1 --format=%cs -- "$FILE")
+            echo "::warning::No new version of $FILE; reviewing the version committed on $stale"
+            echo "stale_date=$stale" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::error::$FILE did not appear after 5 minutes"
+          exit 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run review skill
+        working-directory: files
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PREFIX: ${{ steps.issue.outputs.prefix }}
+        run: |
+          # CI behaviour (no questions, no edits, report only) is defined in the skill's
+          # "When run in CI" section. Tools: read-only plus web access for link checks.
+          # Model is pinned here so every review uses the same model; change it
+          # through a pull request so the switch is visible in the history.
+          claude --model claude-sonnet-5-5 \
+            --tools "Skill,Read,Glob,Grep,WebFetch" \
+            --allowedTools "Skill,Read,Glob,Grep,WebFetch" \
+            -p "Running in GitHub Actions. Use the review-metadata-submission skill on file prefix ${PREFIX}." \
+            > "$GITHUB_WORKSPACE/review.md"
+          test -s "$GITHUB_WORKSPACE/review.md"
+
+      - name: Save report
+        uses: actions/upload-artifact@v4
+        with:
+          name: review
+          path: review.md
+
+  comment:
+    needs: review
+    # Runs even when the review job fails, so the issue always shows the outcome.
+    # Not when the review was skipped, and for a manual run only once the issue
+    # was confirmed to be a "Dataset - ..." issue, so a wrong number gets no comment.
+    if: >-
+      always() && needs.review.result != 'skipped' &&
+      (github.event_name == 'issues' || needs.review.outputs.issue_ok == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Get report
+        if: needs.review.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: review
+
+      - name: Post comment on the issue
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.issue_number || github.event.issue.number }}
+          RESULT: ${{ needs.review.result }}
+          STALE_DATE: ${{ needs.review.outputs.stale_date }}
+          EVENT: ${{ github.event_name }}
+          ACTOR: ${{ github.actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## AI-assisted review"
+            echo
+            if [ "$RESULT" = "success" ] && [ -s review.md ]; then
+              echo "_Generated by the review-metadata-submission skill. These are suggestions for the reviewer; the checklist above still applies._"
+              echo
+              if [ "$EVENT" = "workflow_dispatch" ]; then
+                echo "_Manual re-run by @${ACTOR}, reviewing the record's current file._"
+                echo
+              fi
+              if [ -n "$STALE_DATE" ]; then
+                echo "> [!NOTE]"
+                echo "> No new version of this record's file appeared after submission, so this reviews the version committed on ${STALE_DATE}. If the record was edited before re-submitting, check that those edits are reflected."
+                echo
+              fi
+              head -c 60000 review.md   # GitHub comments are capped at 65,536 characters
+            else
+              echo "The automated review could not be completed (result: ${RESULT})."
+              echo "A common cause is that the record's file did not reach hakai-metadata-entry-form-files."
+              echo "The review will not be retried automatically; please review this record manually, or start the workflow again from the Actions tab (Run workflow) once the file is in place."
+              echo "Run details: ${RUN_URL}"
+            fi
+          } > comment.md
+          gh issue comment "$ISSUE" --body-file comment.md
