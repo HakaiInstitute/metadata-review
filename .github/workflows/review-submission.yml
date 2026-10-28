@@ -3,13 +3,12 @@
 # Location: HakaiInstitute/metadata-review/.github/workflows/review-submission.yml
 #
 # Triggered when notify.js (hakai-metadata-entry-form) opens a "Dataset - <title>"
-# issue on submission. The issue names the record's file (a "Filename:" line, the
-# name of the .yaml in the unpublished/hakai/ folder of
-# HakaiInstitute/hakai-metadata-entry-form-files, where the records service writes
+# issue on submission. The issue has a "Record Filename:<name>" line: the name,
+# without extension, of the record's .yaml in the unpublished/hakai/ folder of
+# HakaiInstitute/hakai-metadata-entry-form-files (where the records service writes
 # submitted records). The workflow runs the review-metadata-submission skill with
-# Claude Code on that file and posts the report as a comment on the issue. For
-# older issues without a "Filename:" line it falls back to finding the file by the
-# record's entry form URL. If anything fails, it posts a short failure comment.
+# Claude Code on that file and posts the report as a comment on the issue. If
+# anything fails, it posts a short failure comment.
 #
 # Runs once per submission: re-running the workflow from the Actions tab is
 # blocked (run_attempt == 1), and edited or reopened issues don't trigger it.
@@ -35,8 +34,8 @@ permissions: {}
 
 jobs:
   review:
-    # Issues created by notify.js, or a manual run; only on the first attempt.
-    # (For a manual run the issue title is checked in the first step.)
+    # Issues created by notify.js, or a manual run (whose issue title is checked
+    # in the first step); only on the first attempt
     if: >-
       github.run_attempt == 1 &&
       (github.event_name == 'workflow_dispatch' ||
@@ -47,128 +46,78 @@ jobs:
       contents: read
       issues: read
     outputs:
-      stale_date: ${{ steps.find.outputs.stale_date }}
       issue_ok: ${{ steps.issue.outputs.ok }}
+      stale_date: ${{ steps.find.outputs.stale_date }}
     steps:
-      - name: Load the issue
+      - name: Read the issue
         id: issue
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           ISSUE: ${{ inputs.issue_number || github.event.issue.number }}
         run: |
-          if ! [[ "$ISSUE" =~ ^[0-9]+$ ]]; then
-            echo "::error::Issue number must be digits only"
-            exit 1
-          fi
+          [[ "$ISSUE" =~ ^[0-9]+$ ]] || { echo "::error::Issue number must be digits only"; exit 1; }
           json=$(gh issue view "$ISSUE" --json title,body,createdAt)
-          title=$(jq -r .title <<< "$json")
-          case "$title" in
+          case "$(jq -r .title <<< "$json")" in
             "Dataset - "*) ;;
             *) echo "::error::Issue #$ISSUE is not a 'Dataset - ...' issue"; exit 1 ;;
           esac
-          jq -r .body <<< "$json" > "$RUNNER_TEMP/issue-body.txt"
-          echo "created_at=$(jq -r .createdAt <<< "$json")" >> "$GITHUB_OUTPUT"
           echo "ok=true" >> "$GITHUB_OUTPUT"
-
-      - name: Get the record's file name from the issue body
-        id: record
-        env:
-          BODY_FILE: ${{ runner.temp }}/issue-body.txt
-        run: |
-          # Preferred: a "Filename: <name>" line (bold, backticks and a .yaml
-          # extension are all tolerated). Only [A-Za-z0-9._-] is accepted, so the
-          # value is safe to use in a path.
-          prefix=$(grep -m1 -oiP '^\W*file ?name\W*\K[A-Za-z0-9._-]+' "$BODY_FILE" || true)
-          prefix="${prefix%.yaml}"
-          if [ -n "$prefix" ]; then
-            echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # Fallback for issues without a filename: the issue links
-          # .../hakai-metadata-entry-form/#/<lang>/hakai/<userID>/<recordID>
-          # but maintenance_note uses .../hakai-metadata-entry-form#/<lang>/hakai/...
-          # so match on the hakai/<userID>/<recordID> part only.
-          path=$(grep -oP 'hakai-metadata-entry-form/?#/[a-z]{2}/hakai/\K[^/\s>]+/[^/\s>]+' "$BODY_FILE" \
-            | head -n1 || true)
-          if [ -z "$path" ]; then
-            echo "::error::No filename or metadata entry form URL found in the issue body"
-            exit 1
-          fi
-          echo "path=hakai/$path" >> "$GITHUB_OUTPUT"
+          echo "created_at=$(jq -r .createdAt <<< "$json")" >> "$GITHUB_OUTPUT"
+          # Only [A-Za-z0-9._-] is accepted, so the value is safe to use in a path
+          prefix=$(jq -r .body <<< "$json" | grep -m1 -oP '^Record Filename:<\K[A-Za-z0-9._-]+' || true)
+          [ -n "$prefix" ] || { echo "::error::No 'Record Filename:' line found in the issue body"; exit 1; }
+          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
 
       - name: Check out metadata files and skill
         uses: actions/checkout@v5
         with:
           repository: HakaiInstitute/hakai-metadata-entry-form-files
           path: files
-          fetch-depth: 0        # full history (without file contents) to date each file
+          fetch-depth: 0        # full history (without file contents) to date the file
           filter: blob:none
           persist-credentials: false
 
-      - name: Wait for the record's files to arrive
+      - name: Wait for the record's file to arrive
         id: find
         working-directory: files
         env:
-          PREFIX: ${{ steps.record.outputs.prefix }}
-          RECORD_PATH: ${{ steps.record.outputs.path }}
+          FILE: unpublished/hakai/${{ steps.issue.outputs.prefix }}.yaml
           ISSUE_CREATED: ${{ steps.issue.outputs.created_at }}
-          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
-          # The issue and the files are created independently on submit, so the
-          # files may land shortly before or after the issue. A record that was put
-          # back into draft and re-submitted still has files from its earlier
-          # submission (the file name never changes), so only accept a file
-          # committed within 10 minutes before the issue was created, or later.
-          # Retry for ~5 minutes. A manual run reviews the current file as it is:
-          # no freshness check and no waiting.
+          # A manual run reviews the current file as it is: no waiting, no freshness check.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            [ -f "$FILE" ] || { echo "::error::$FILE does not exist"; exit 1; }
+            exit 0
+          fi
+          # The issue and the file are created independently on submit, so the file
+          # may land shortly before or after the issue. A record that was put back
+          # into draft and re-submitted still has its earlier file (the name never
+          # changes), so only accept a commit within 10 minutes before the issue
+          # was created, or later. Retry for ~5 minutes.
           cutoff=$(( $(date -d "$ISSUE_CREATED" +%s) - 600 ))
-          attempts=10
-          [ "$MANUAL" = "true" ] && attempts=1
-          match=""
-          for attempt in $(seq 1 $attempts); do
-            match=""; newest=0
-            if [ -n "$PREFIX" ]; then
-              [ -f "unpublished/hakai/$PREFIX.yaml" ] && match="unpublished/hakai/$PREFIX.yaml"
+          for attempt in $(seq 1 10); do
+            if [ -f "$FILE" ]; then
+              committed=$(git log -1 --format=%ct -- "$FILE")
+              [ "${committed:-0}" -ge "$cutoff" ] && exit 0
+              echo "Attempt $attempt: $FILE is from an earlier submission, waiting for the new version"
             else
-              # Fallback by URL: a record can match more than one file if its file
-              # name changed, so take the most recently committed one.
-              for f in $(grep -lF -- "$RECORD_PATH" unpublished/hakai/*.yaml || true); do
-                t=$(git log -1 --format=%ct -- "$f")
-                if [ "${t:-0}" -gt "$newest" ]; then newest=$t; match=$f; fi
-              done
+              echo "Attempt $attempt: $FILE not found yet, waiting 30 s"
             fi
-            if [ -n "$match" ]; then
-              if [ "$MANUAL" = "true" ]; then
-                echo "Manual run: reviewing the current $match"
-                echo "prefix=$(basename "$match" .yaml)" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-              committed=$(git log -1 --format=%ct -- "$match")
-              if [ "${committed:-0}" -ge "$cutoff" ]; then
-                echo "Found $match, committed $(date -d "@$committed" -u +%FT%TZ)"
-                echo "prefix=$(basename "$match" .yaml)" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-              echo "Attempt $attempt: $match is from an earlier submission, waiting for the new version"
-            else
-              echo "Attempt $attempt: files not found yet, waiting 30 s"
-            fi
-            [ "$attempt" -lt "$attempts" ] || break
+            [ "$attempt" -lt 10 ] || break
             sleep 30
             git fetch --quiet origin HEAD
             git reset --quiet --hard FETCH_HEAD
           done
-          if [ -n "$match" ]; then
+          if [ -f "$FILE" ]; then
             # No new commit: the record was likely re-submitted without changes,
-            # so the existing files are still current. Review them, but say so.
-            stale=$(git log -1 --format=%cs -- "$match")
-            echo "::warning::No new version of $match; reviewing the version committed on $stale"
-            echo "prefix=$(basename "$match" .yaml)" >> "$GITHUB_OUTPUT"
+            # so the existing file is still current. Review it, but say so.
+            stale=$(git log -1 --format=%cs -- "$FILE")
+            echo "::warning::No new version of $FILE; reviewing the version committed on $stale"
             echo "stale_date=$stale" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "::error::No matching .yaml in unpublished/hakai/ (${PREFIX:-$RECORD_PATH})"
+          echo "::error::$FILE did not appear after 5 minutes"
           exit 1
 
       - name: Set up Node.js
@@ -183,7 +132,7 @@ jobs:
         working-directory: files
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          PREFIX: ${{ steps.find.outputs.prefix }}
+          PREFIX: ${{ steps.issue.outputs.prefix }}
         run: |
           # CI behaviour (no questions, no edits, report only) is defined in the skill's
           # "When run in CI" section. Tools: read-only plus web access for link checks.
@@ -204,12 +153,11 @@ jobs:
   comment:
     needs: review
     # Runs even when the review job fails, so the issue always shows the outcome.
-    # For a manual run, only once the issue was confirmed to be a "Dataset - ..."
-    # issue, so a wrong issue number never gets a comment.
+    # Not when the review was skipped, and for a manual run only once the issue
+    # was confirmed to be a "Dataset - ..." issue, so a wrong number gets no comment.
     if: >-
-      always() && github.run_attempt == 1 &&
-      ((github.event_name == 'issues' && startsWith(github.event.issue.title, 'Dataset - ')) ||
-       (github.event_name == 'workflow_dispatch' && needs.review.outputs.issue_ok == 'true'))
+      always() && needs.review.result != 'skipped' &&
+      (github.event_name == 'issues' || needs.review.outputs.issue_ok == 'true')
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -227,35 +175,31 @@ jobs:
           ISSUE: ${{ inputs.issue_number || github.event.issue.number }}
           RESULT: ${{ needs.review.result }}
           STALE_DATE: ${{ needs.review.outputs.stale_date }}
-          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+          EVENT: ${{ github.event_name }}
           ACTOR: ${{ github.actor }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          if [ "$RESULT" = "success" ] && [ -s review.md ]; then
-            {
-              echo "## AI-assisted review"
-              echo
+          {
+            echo "## AI-assisted review"
+            echo
+            if [ "$RESULT" = "success" ] && [ -s review.md ]; then
               echo "_Generated by the review-metadata-submission skill. These are suggestions for the reviewer; the checklist above still applies._"
               echo
-              if [ "$MANUAL" = "true" ]; then
-                echo "_Manual re-run by @${ACTOR}, reviewing the record's current files._"
+              if [ "$EVENT" = "workflow_dispatch" ]; then
+                echo "_Manual re-run by @${ACTOR}, reviewing the record's current file._"
                 echo
               fi
               if [ -n "$STALE_DATE" ]; then
                 echo "> [!NOTE]"
-                echo "> No new version of this record's files appeared after submission, so this reviews the version committed on ${STALE_DATE}. If the record was edited before re-submitting, check that those edits are reflected."
+                echo "> No new version of this record's file appeared after submission, so this reviews the version committed on ${STALE_DATE}. If the record was edited before re-submitting, check that those edits are reflected."
                 echo
               fi
               head -c 60000 review.md   # GitHub comments are capped at 65,536 characters
-            } > comment.md
-          else
-            {
-              echo "## AI-assisted review"
-              echo
+            else
               echo "The automated review could not be completed (result: ${RESULT})."
-              echo "A common cause is that the record's files did not reach hakai-metadata-entry-form-files."
-              echo "The review will not be retried automatically; please review this record manually, or start the workflow again from the Actions tab (Run workflow) once the files are in place."
+              echo "A common cause is that the record's file did not reach hakai-metadata-entry-form-files."
+              echo "The review will not be retried automatically; please review this record manually, or start the workflow again from the Actions tab (Run workflow) once the file is in place."
               echo "Run details: ${RUN_URL}"
-            } > comment.md
-          fi
+            fi
+          } > comment.md
           gh issue comment "$ISSUE" --body-file comment.md
