@@ -139,7 +139,8 @@ jobs:
           # Model is pinned here so every review uses the same model; change it
           # through a pull request so the switch is visible in the history.
           claude --model claude-sonnet-5-5 \
-            --allowedTools "Skill,Read,Glob,Grep,WebFetch,Bash(curl:*)" \
+            --tools "Skill,Read,Glob,Grep,WebFetch" \
+            --allowedTools "Skill,Read,Glob,Grep,WebFetch" \
             -p "Running in GitHub Actions. Use the review-metadata-submission skill on file prefix ${PREFIX}." \
             > "$GITHUB_WORKSPACE/review.md"
           test -s "$GITHUB_WORKSPACE/review.md"
