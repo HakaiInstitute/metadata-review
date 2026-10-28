@@ -3,7 +3,10 @@
 # Location: HakaiInstitute/metadata-review/.github/workflows/review-submission.yml
 #
 # Triggered when notify.js (hakai-metadata-entry-form) opens a "Dataset - <title>"
-# issue on submission. The issue has a "Record Filename:<name>" line: the name,
+# issue on submission. Only issues opened by the account notify.js authenticates
+# as are reviewed automatically: set the repository variable
+# SUBMISSION_ISSUE_AUTHOR (Settings > Secrets and variables > Actions > Variables)
+# to that account's login. The issue has a "Record Filename:<name>" line: the name,
 # without extension, of the record's .yaml in the unpublished/hakai/ folder of
 # HakaiInstitute/hakai-metadata-entry-form-files (where the records service writes
 # submitted records). The workflow runs the review-metadata-submission skill with
@@ -34,12 +37,17 @@ permissions: {}
 
 jobs:
   review:
-    # Issues created by notify.js, or a manual run (whose issue title is checked
-    # in the first step); only on the first attempt
+    # Automatic: only issues opened by the account notify.js uses (repository
+    # variable SUBMISSION_ISSUE_AUTHOR), so nobody else can trigger a billable run
+    # by opening an issue with the right title. If the variable is not set, no
+    # automatic run happens. Manual: any run (restricted to users with write
+    # access by GitHub); its issue title is checked in the first step.
+    # Only on the first attempt.
     if: >-
       github.run_attempt == 1 &&
       (github.event_name == 'workflow_dispatch' ||
-       startsWith(github.event.issue.title, 'Dataset - '))
+       (github.event.issue.user.login == vars.SUBMISSION_ISSUE_AUTHOR &&
+        startsWith(github.event.issue.title, 'Dataset - ')))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
